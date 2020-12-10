@@ -6,9 +6,12 @@ import 'package:bbb_app/src/connect/meeting/main_websocket/meeting/meeting.dart'
 import 'package:bbb_app/src/connect/meeting/main_websocket/poll/model/option.dart';
 import 'package:bbb_app/src/connect/meeting/main_websocket/poll/model/poll.dart';
 import 'package:bbb_app/src/connect/meeting/main_websocket/user/user.dart';
-import 'package:bbb_app/src/connect/meeting/main_websocket/video/video_connection.dart';
+import 'package:bbb_app/src/connect/meeting/main_websocket/video/connection/incoming_screenshare_video_connection.dart';
+import 'package:bbb_app/src/connect/meeting/main_websocket/video/connection/incoming_webcam_video_connection.dart';
 import 'package:bbb_app/src/connect/meeting/meeting_info.dart';
+import 'package:bbb_app/src/connect/meeting/model/user_model.dart';
 import 'package:bbb_app/src/locale/app_localizations.dart';
+import 'package:bbb_app/src/view/fullscreen/fullscreen_view.dart';
 import 'package:bbb_app/src/view/main/presentation/presentation_widget.dart';
 import 'package:bbb_app/src/view/meeting_info/meeting_info_view.dart';
 import 'package:bbb_app/src/view/privacy_policy/privacy_policy_view.dart';
@@ -34,13 +37,19 @@ class _MainViewState extends State<MainView> with WidgetsBindingObserver {
   MainWebSocket _mainWebSocket;
 
   /// List of video streams we currently display.
-  Map<String, VideoConnection> _videoConnections;
+  Map<String, IncomingWebcamVideoConnection> _videoConnections;
 
   /// List of screenshare streams we currently display.
-  Map<String, VideoConnection> _screenshareVideoConnections;
+  Map<String, IncomingScreenshareVideoConnection> _screenshareVideoConnections;
 
   /// Counter for total unread messages.
   int _totalUnreadMessages = 0;
+
+  /// Users currently taling.
+  Set<String> _currentlyTalkingUsers = new Set<String>();
+
+  /// Map of users currently in the meeting.
+  Map<String, UserModel> _userMapByInternalId = {};
 
   /// Subscription to video connection list changes.
   StreamSubscription _videoConnectionsStreamSubscription;
@@ -60,6 +69,13 @@ class _MainViewState extends State<MainView> with WidgetsBindingObserver {
 
   /// Subscription to user events.
   StreamSubscription<UserEvent> _userEventStreamSubscription;
+
+  StreamSubscription<bool> _muteStreamSubscription;
+
+  bool _muteStatus = false;
+
+  /// Subscription to user changes.
+  StreamSubscription _userChangesStreamSubscription;
 
   @override
   void initState() {
@@ -110,6 +126,35 @@ class _MainViewState extends State<MainView> with WidgetsBindingObserver {
           !event.data.isOnline()) {
         _onCurrentUserKicked();
       }
+
+      // Check whether user is currently talking
+      if (event.type == UserEventType.CHANGED) {
+        if (!event.data.talking &&
+            _currentlyTalkingUsers.contains(event.data.name)) {
+          setState(() {
+            _currentlyTalkingUsers.remove(event.data.name);
+          });
+        } else if (event.data.talking &&
+            !_currentlyTalkingUsers.contains(event.data.name)) {
+          setState(() {
+            _currentlyTalkingUsers.add(event.data.name);
+          });
+        }
+      }
+    });
+
+    _userMapByInternalId = _mainWebSocket.userModule.userMapByInternalId;
+    _userChangesStreamSubscription =
+        _mainWebSocket.userModule.changes.listen((userMap) {
+      setState(() => _userMapByInternalId =
+          Map.of(_mainWebSocket.userModule.userMapByInternalId));
+    });
+
+    _muteStreamSubscription =
+        _mainWebSocket.callModule.callMuteStream.listen((event) {
+      setState(() {
+        _updateMuteStatus(event);
+      });
     });
 
     WidgetsBinding.instance.addObserver(this);
@@ -141,6 +186,8 @@ class _MainViewState extends State<MainView> with WidgetsBindingObserver {
     _pollStreamSubscription.cancel();
     _meetingEventSubscription.cancel();
     _userEventStreamSubscription.cancel();
+    _userChangesStreamSubscription.cancel();
+    _muteStreamSubscription.cancel();
 
     _mainWebSocket.disconnect();
 
@@ -190,51 +237,295 @@ class _MainViewState extends State<MainView> with WidgetsBindingObserver {
         .forEach((key, value) => _totalUnreadMessages += value);
   }
 
+  void _micClick() {
+    _mainWebSocket.callModule.toggleAudio();
+  }
+
+  void _updateMuteStatus(bool status) {
+    _muteStatus = status;
+  }
+
+  /// Build a list of currently talking users.
+  Widget _buildCurrentlyTalkingUserList() {
+    List<Widget> badges = _currentlyTalkingUsers
+        .map((e) => _buildCurrentlyTalkingUserBadge(e))
+        .toList(growable: false);
+
+    return SizedBox(
+      height: 30,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: badges,
+      ),
+    );
+  }
+
+  /// Build badge for a currently talking user.
+  Widget _buildCurrentlyTalkingUserBadge(String userName) {
+    return new Flexible(
+      fit: FlexFit.loose,
+      child: Container(
+        margin: EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+        padding: EdgeInsets.symmetric(vertical: 2, horizontal: 5),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(9999),
+          color: Theme.of(context).buttonColor,
+        ),
+        child: Text(
+          userName,
+          softWrap: false,
+          overflow: TextOverflow.fade,
+        ),
+      ),
+    );
+  }
+
+  /// Build the screen share widget.
+  Widget _buildScreenShareWidget() {
+    String screenshareKey = _screenshareVideoConnections.keys.first;
+
+    RTCVideoView videoView = RTCVideoView(
+      _screenshareVideoConnections[screenshareKey].remoteRenderer,
+      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(8),
+      child: Stack(
+        children: [
+          if (!_screenshareVideoConnections[screenshareKey]
+              .remoteRenderer
+              .renderVideo)
+            Center(child: CircularProgressIndicator()),
+          videoView,
+          Align(
+            alignment: Alignment.topRight,
+            child: IconButton(
+              icon: Icon(Icons.fullscreen),
+              color: Colors.grey,
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => FullscreenView(child: videoView),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Build the presentation widget to show.
+  Widget _buildPresentationWidget() {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      child: PresentationWidget(_mainWebSocket),
+    );
+  }
+
+  /// Build the webcam list.
+  Widget _buildCameraList(Axis axis) {
+    return PageView.builder(
+      scrollDirection: axis,
+      controller:
+          PageController(viewportFraction: axis == Axis.horizontal ? 0.6 : 0.4),
+      itemCount: _videoConnections.length,
+      itemBuilder: (BuildContext context, int index) {
+        String key = _videoConnections.keys.elementAt(index);
+
+        bool videoShown = _videoConnections[key].remoteRenderer.renderVideo;
+
+        RTCVideoRenderer remoteRenderer = _videoConnections[key].remoteRenderer;
+
+        RTCVideoView videoView = RTCVideoView(remoteRenderer,
+            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain);
+
+        return Container(
+          margin: const EdgeInsets.all(8),
+          color: Colors.black87,
+          child: AspectRatio(
+            aspectRatio: 4 / 3,
+            child: Stack(
+              children: [
+                if (!videoShown) Center(child: CircularProgressIndicator()),
+                videoView,
+                Container(
+                  margin: EdgeInsets.only(top: 10),
+                  alignment: Alignment.topCenter,
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(10),
+                      color: Colors.white.withOpacity(0.7),
+                    ),
+                    child: Text(
+                      _userMapByInternalId[
+                              _videoConnections[key].internalUserId]
+                          .name,
+                      style: TextStyle(color: Colors.black),
+                    ),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.topRight,
+                  child: IconButton(
+                    icon: Icon(Icons.fullscreen),
+                    color: Colors.grey,
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              FullscreenView(child: videoView),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    String screenshareKey;
-    if (_screenshareVideoConnections.length > 0) {
-      screenshareKey = _screenshareVideoConnections.keys.elementAt(0);
-    }
-
     return Scaffold(
       appBar: _buildAppBar(),
-      body: Column(
-        children: <Widget>[
-          if (_videoConnections.length > 0)
-            Expanded(
-              child: PageView.builder(
-                  scrollDirection: Axis.horizontal,
-                  controller: PageController(viewportFraction: 1.0),
-                  itemCount: _videoConnections.length,
-                  itemBuilder: (BuildContext context, int index) {
-                    String key = _videoConnections.keys.elementAt(index);
-                    return Container(
-                      padding: const EdgeInsets.all(8),
-                      width: MediaQuery.of(context).size.width,
-                      child: RTCVideoView(_videoConnections[key].remoteRenderer,
-                          objectFit: RTCVideoViewObjectFit
-                              .RTCVideoViewObjectFitContain),
-                    );
-                  }),
+      body: OrientationBuilder(
+        builder: (context, orientation) {
+          if (orientation == Orientation.portrait) {
+            return Column(
+              children: [
+                _buildCurrentlyTalkingUserList(),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: <Widget>[
+                      if (_videoConnections.length > 0)
+                        SizedBox(
+                          height: 160,
+                          child: _buildCameraList(Axis.horizontal),
+                        ),
+                      if (_screenshareVideoConnections.length == 0)
+                        Expanded(
+                          child: _buildPresentationWidget(),
+                        ),
+                      if (_screenshareVideoConnections.length > 0)
+                        Expanded(
+                          child: _buildScreenShareWidget(),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          } else {
+            return Column(
+              children: [
+                _buildCurrentlyTalkingUserList(),
+                Expanded(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: <Widget>[
+                      if (_videoConnections.length > 0)
+                        SizedBox(
+                          width: 200,
+                          child: _buildCameraList(Axis.vertical),
+                        ),
+                      if (_screenshareVideoConnections.length == 0)
+                        Expanded(
+                          child: _buildPresentationWidget(),
+                        ),
+                      if (_screenshareVideoConnections.length > 0)
+                        Expanded(
+                          child: _buildScreenShareWidget(),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          }
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        child: Icon(
+          _muteStatus ? Icons.mic_off_outlined : Icons.mic_outlined,
+          size: 30,
+          color: Theme.of(context).iconTheme.color,
+        ),
+        onPressed: _micClick,
+        elevation: 4.0,
+        backgroundColor: Theme.of(context).buttonTheme.colorScheme.primary,
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      bottomNavigationBar: Builder(
+        builder: (context) => BottomAppBar(
+          child: Container(
+            margin: EdgeInsets.only(left: 12.0, right: 12.0),
+            child: Row(
+              mainAxisSize: MainAxisSize.max,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: <Widget>[
+                IconButton(
+                  onPressed: () => _toggleWebcamOnOff(context),
+                  iconSize: 27.0,
+                  icon: Icon(
+                    _mainWebSocket.videoModule.isWebcamActive()
+                        ? Icons.photo_camera
+                        : Icons.photo_camera_outlined,
+                  ),
+                ),
+                IconButton(
+                  onPressed: _mainWebSocket.videoModule.isWebcamActive()
+                      ? () => _toggleWebcamFrontBack(context)
+                      : null,
+                  iconSize: 27.0,
+                  icon: Icon(
+                    _mainWebSocket.videoModule.isWebcamActive()
+                        ? Icons.flip_camera_ios
+                        : Icons.flip_camera_ios_outlined,
+                  ),
+                ),
+                //to leave space in between the bottom app bar items and below the FAB
+                SizedBox(
+                  width: 50.0,
+                ),
+                IconButton(
+                  onPressed: _isPresenter()
+                      ? () => _toggleScreenshareOnOff(context)
+                      : null,
+                  iconSize: 27.0,
+                  icon: Icon(
+                    _mainWebSocket.videoModule.isScreenshareActive()
+                        ? Icons.screen_share
+                        : Icons.screen_share_outlined,
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => SettingsView()),
+                  ),
+                  iconSize: 27.0,
+                  icon: Icon(
+                    Icons.settings,
+                  ),
+                ),
+              ],
             ),
-          if (_screenshareVideoConnections.length == 0)
-            Expanded(
-                child: Container(
-              padding: const EdgeInsets.all(8),
-              child: PresentationWidget(_mainWebSocket),
-            )),
-          if (_screenshareVideoConnections.length > 0)
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                child: RTCVideoView(
-                    _screenshareVideoConnections[screenshareKey].remoteRenderer,
-                    objectFit:
-                        RTCVideoViewObjectFit.RTCVideoViewObjectFitContain),
-              ),
-            )
-        ],
+          ),
+          //to add a space between the FAB and BottomAppBar
+          shape: CircularNotchedRectangle(),
+          //color of the BottomAppBar
+          color: Theme.of(context).appBarTheme.color,
+        ),
       ),
     );
   }
@@ -370,4 +661,34 @@ class _MainViewState extends State<MainView> with WidgetsBindingObserver {
           ];
         },
       );
+
+  _toggleWebcamOnOff(BuildContext context) {
+    _mainWebSocket.videoModule
+        .toggleWebcamOnOff()
+        .then((value) => setState(() {}));
+  }
+
+  _toggleWebcamFrontBack(BuildContext context) {
+    if (_mainWebSocket.videoModule.isWebcamActive()) {
+      _mainWebSocket.videoModule.toggleWebcamFrontBack();
+    }
+  }
+
+  _toggleScreenshareOnOff(BuildContext context) {
+    if (_isPresenter()) {
+      _mainWebSocket.videoModule.toggleScreenshareOnOff();
+    } else {
+      var snackBarController = Scaffold.of(context).showSnackBar(SnackBar(
+        content: Text(
+            AppLocalizations.of(context).get("main.share-without-presenter")),
+      ));
+      Future.delayed(
+          const Duration(seconds: 2), () => {snackBarController.close()});
+    }
+  }
+
+  bool _isPresenter() {
+    return _userMapByInternalId[widget._meetingInfo.internalUserID] != null &&
+        _userMapByInternalId[widget._meetingInfo.internalUserID].isPresenter;
+  }
 }

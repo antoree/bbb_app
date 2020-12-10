@@ -35,6 +35,11 @@ class AppLocalizations {
       de: "Inhalt konnte nicht geladen werden",
     ));
     _addLocalization(_Localization(
+      "start.uni-link-failed",
+      en: "Opening the link with the app failed",
+      de: "Die App konnte nicht korrekt mit dem Link geladen werden",
+    ));
+    _addLocalization(_Localization(
       "start.bbb-trademark",
       en: "This app uses BigBlueButton and is not endorsed or certified by BigBlueButton Inc. BigBlueButton and the BigBlueButton Logo are trademarks of BigBlueButton Inc.",
       de: "Diese App verwendet BigBlueButton, ist jedoch keine offizielle und zertifizierte App von BigBlueButton Inc. BigBlueButton sowie das BigBlueButton Logo sind Warenzeichen von BigBlueButton Inc.",
@@ -108,6 +113,16 @@ class AppLocalizations {
       "login.in-waiting-room-message",
       en: "Please wait until the moderator of the meeting is approving you joining the meeting.",
       de: "Bitte warten Sie bis der Moderator Sie zum Meeting zulässt.",
+    ));
+    _addLocalization(_Localization(
+      "login.wait-for-meeting-to-start",
+      en: "The meeting hasn't started yet.",
+      de: "Die Konferenz hat noch nicht begonnen.",
+    ));
+    _addLocalization(_Localization(
+      "login.wait-for-meeting-to-start-message",
+      en: "You will automatically join when the meeting starts.",
+      de: "Sie treten der Konferenz automatisch bei, sobald sie begonnen hat.",
     ));
     _addLocalization(_Localization(
       "settings.title",
@@ -188,6 +203,11 @@ class AppLocalizations {
       "privacy-policy.title",
       en: "Privacy policy",
       de: "Datenschutzerklärung",
+    ));
+    _addLocalization(_Localization(
+      "main.share-without-presenter",
+      en: "You can't share your screen if you are not the current presenter.",
+      de: "Sie können Ihren Bildschirm nicht teilen, wenn Sie kein Präsentator sind.",
     ));
 
     _isInitialized = true;

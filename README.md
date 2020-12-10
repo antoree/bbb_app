@@ -2,7 +2,11 @@
     <img src="assets/icon/icon.png" width="200">
 </p>
 
-# App client for BigBlueButton
+<p align="center">
+    Now available as early access version on <a href="https://play.google.com/store/apps/details?id=edu.hm.cs.tape.bbb_app">Google Play</a>.
+</p>
+
+# App client for BigBlueButton services
 
 This app uses BigBlueButton and is not endorsed or certified by BigBlueButton Inc. BigBlueButton and the BigBlueButton Logo are trademarks of BigBlueButton Inc.
 
